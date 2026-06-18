@@ -75,6 +75,24 @@ out_power <- ps_generate_adjusted(
 )
 ```
 
+## Custom sampling function example
+
+You can define your own Python-side adjustment function and pass it directly
+from R. The function must accept a `GenerationContext` and return a modified
+`dict[str, float]` of token log-probabilities.
+
+```r
+reticulate::py_run_string("\ndef my_adjust_fn(ctx):\n    # start from current token log-probs\n    out = dict(ctx.token_probs)\n\n    # example: slightly favour a specific token if present\n    if ' the' in out:\n        out[' the'] = out[' the'] + 0.25\n\n    return out\n")
+
+out_custom <- ps_generate_adjusted(
+  model = model,
+  top_k = 8L,
+  top_p = 0.9,
+  adjust_fn = reticulate::py$my_adjust_fn,
+  max_tokens = 128L
+)
+```
+
 ## Managed backend behavior
 
 Users do **not** need to manually install Python backend dependencies if they use:
