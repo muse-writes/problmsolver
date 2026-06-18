@@ -1,0 +1,96 @@
+---
+title: "Getting Started with problmsolver"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with problmsolver}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Overview
+
+`problmsolver` is an R wrapper over Python `problm_solver` via `reticulate`.
+It provides a small, explicit R API for model loading, querying, adjusted
+sampling, and dataset utilities.
+
+## Backend setup
+
+### Managed backend (recommended)
+
+```{r eval = FALSE}
+library(problmsolver)
+
+# Creates/updates a managed virtualenv and installs `problm-solver`
+ps_backend_setup()
+ps_use_backend_env()
+```
+
+### From a local clone (no PyPI required)
+
+```{r eval = FALSE}
+# If you already cloned probLM-solver locally:
+ps_backend_setup_local("/abs/path/to/probLM-solver")
+```
+
+### Auto-create on first configure
+
+```{r eval = FALSE}
+ps_configure(envname = "r-problmsolver", auto_create = TRUE)
+```
+
+## Minimal model example
+
+```{r eval = FALSE}
+model <- ps_model(
+  fname = "/path/to/model.gguf",
+  context = "Why is the sky blue?",
+  n_ctx = 4096L,
+  logits_all = TRUE,
+  n_gpu_layers = 999L
+)
+
+ps_query(model)
+```
+
+## Sampling examples
+
+```{r eval = FALSE}
+# Low-temperature
+low_temp <- ps_sample_low_temp(alpha = 2.0)
+out_low <- ps_generate_adjusted(
+  model = model,
+  top_k = 8L,
+  top_p = 0.9,
+  adjust_fn = low_temp,
+  max_tokens = 128L
+)
+
+# Power distribution + Metropolis branch sampling
+metro <- ps_metropolis_sampler(equil_branches = 1L, max_branches = 10L)
+power <- ps_sample_power_dist(alpha = 2.0, lookahead_depth = 10L, branch_sampler = metro)
+out_power <- ps_generate_adjusted(
+  model = model,
+  top_k = 8L,
+  top_p = 0.9,
+  adjust_fn = power,
+  max_tokens = 128L
+)
+```
+
+## Dataset utility example
+
+```{r eval = FALSE}
+math500 <- ps_get_math500()
+problems <- ps_get_problems_math500()
+head(problems)
+```
+
+## Notes for robust usage
+
+- Set `logits_all = TRUE` when using adjusted generation.
+- Use `ps_reset_module()` if you switch Python environments mid-session.
+- Keep one backend env per project for reproducibility.

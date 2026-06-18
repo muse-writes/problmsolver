@@ -90,6 +90,16 @@ Example:
 ps_configure(envname = "r-problmsolver", auto_create = TRUE)
 ```
 
+## Notes for package checks / CI
+
+Automatic backend creation can be undesirable in strict CI or CRAN-like checks.
+In those contexts, prefer explicit setup in advance and use non-failing probes:
+
+```r
+ps_configure(required = FALSE)
+ps_available()
+```
+
 ## API overview
 
 - Backend/session: `ps_configure()`, `ps_available()`, `ps_module()`, `ps_reset_module()`
