@@ -77,18 +77,27 @@ out_power <- ps_generate_adjusted(
 
 ## Custom sampling function example
 
-You can define your own Python-side adjustment function and pass it directly
-from R. The function must accept a `GenerationContext` and return a modified
-`dict[str, float]` of token log-probabilities.
+You can define a sampling function directly in R and wrap it for Python with
+`ps_r_adjust_fn()`. The R function receives a list with token probabilities and
+must return adjusted named log-probabilities.
 
 ```r
-reticulate::py_run_string("\ndef my_adjust_fn(ctx):\n    # start from current token log-probs\n    out = dict(ctx.token_probs)\n\n    # example: slightly favour a specific token if present\n    if ' the' in out:\n        out[' the'] = out[' the'] + 0.25\n\n    return out\n")
+my_adjust_r <- function(ctx) {
+  out <- ctx$token_probs
+
+  # example: slightly favour a specific token if present
+  if (' the' %in% names(out)) {
+    out[' the'] <- out[' the'] + 0.25
+  }
+
+  out
+}
 
 out_custom <- ps_generate_adjusted(
   model = model,
   top_k = 8L,
   top_p = 0.9,
-  adjust_fn = reticulate::py$my_adjust_fn,
+  adjust_fn = ps_r_adjust_fn(my_adjust_r),
   max_tokens = 128L
 )
 ```
@@ -123,5 +132,5 @@ ps_available()
 - Backend/session: `ps_configure()`, `ps_available()`, `ps_module()`, `ps_reset_module()`
 - Model: `ps_model()`, `ps_query()`, `ps_query_n_times()`, `ps_query_log_probs()`
 - Adjusted gen: `ps_generate_adjusted()`, `ps_test_dataset_adjusted()`
-- Samplers: `ps_metropolis_sampler()`, `ps_beam_sampler()`, `ps_sample_low_temp()`, `ps_sample_power_dist()`, `ps_adjust_identity()`
+- Samplers: `ps_metropolis_sampler()`, `ps_beam_sampler()`, `ps_sample_low_temp()`, `ps_sample_power_dist()`, `ps_adjust_identity()`, `ps_r_adjust_fn()`
 - Datasets: `ps_get_math500()`, `ps_get_problems_math500()`

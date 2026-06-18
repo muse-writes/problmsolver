@@ -118,3 +118,14 @@ test_that('local backend setup validates path', {
     'must be an existing directory'
   )
 })
+
+
+test_that('ps_r_adjust_fn validates input function', {
+  expect_error(ps_r_adjust_fn(1), '`fn` must be a function')
+
+  f <- ps_r_adjust_fn(function(ctx) {
+    tp <- ctx$token_probs
+    tp + 0.1
+  })
+  expect_false(is.null(f))
+})

@@ -84,13 +84,19 @@ out_power <- ps_generate_adjusted(
 ## Custom sampling function example
 
 ```{r eval = FALSE}
-reticulate::py_run_string("\ndef my_adjust_fn(ctx):\n    out = dict(ctx.token_probs)\n    if ' the' in out:\n        out[' the'] = out[' the'] + 0.25\n    return out\n")
+my_adjust_r <- function(ctx) {
+  out <- ctx$token_probs
+  if (' the' %in% names(out)) {
+    out[' the'] <- out[' the'] + 0.25
+  }
+  out
+}
 
 out_custom <- ps_generate_adjusted(
   model = model,
   top_k = 8L,
   top_p = 0.9,
-  adjust_fn = reticulate::py$my_adjust_fn,
+  adjust_fn = ps_r_adjust_fn(my_adjust_r),
   max_tokens = 128L
 )
 ```

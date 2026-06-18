@@ -3,7 +3,7 @@
 #' This package provides a thin, explicit wrapper around the Python package
 #' `problm_solver` using `reticulate`.
 #'
-#' @importFrom reticulate import py_module_available py_config use_python use_virtualenv
+#' @importFrom reticulate import py_module_available py_config py_func use_python use_virtualenv
 #' @importFrom reticulate py_to_r virtualenv_create virtualenv_exists virtualenv_install
 NULL
 
@@ -257,6 +257,65 @@ ps_sample_power_dist <- function(alpha, lookahead_depth = 10L, branch_sampler = 
 #' @export
 ps_adjust_identity <- function() {
   ps_module()$adjust_probs$adjust_identity
+}
+
+
+#' Wrap an R sampling function as a Python-compatible adjust function
+#'
+#' Converts an R function into a Python callable suitable for
+#' `ps_generate_adjusted(..., adjust_fn = ...)`.
+#'
+#' The R function must accept one argument `ctx`, a list with fields:
+#' - `token_probs`: named numeric vector of token log-probabilities
+#' - `prev_probs`: numeric vector of previously selected token probabilities
+#' - `context_tokens`: integer vector of current token IDs
+#'
+#' The function must return either:
+#' - a named numeric vector, or
+#' - a named list of numeric values
+#'
+#' representing adjusted token log-probabilities.
+#'
+#' @param fn R function implementing adjustment logic.
+#'
+#' @return Python callable.
+#' @export
+ps_r_adjust_fn <- function(fn) {
+  if (!is.function(fn)) {
+    stop('`fn` must be a function.', call. = FALSE)
+  }
+
+  py_func(function(ctx) {
+    r_ctx <- list(
+      token_probs = as.numeric(unlist(py_to_r(ctx$token_probs))),
+      prev_probs = as.numeric(py_to_r(ctx$prev_probs)),
+      context_tokens = as.integer(py_to_r(ctx$context_tokens))
+    )
+    names(r_ctx$token_probs) <- names(py_to_r(ctx$token_probs))
+
+    out <- fn(r_ctx)
+
+    if (is.numeric(out)) {
+      if (is.null(names(out))) {
+        stop('R adjust function must return named numeric output.', call. = FALSE)
+      }
+      out_list <- as.list(as.numeric(out))
+      names(out_list) <- names(out)
+      return(out_list)
+    }
+
+    if (is.list(out)) {
+      if (is.null(names(out))) {
+        stop('R adjust function must return a named list.', call. = FALSE)
+      }
+      out_vals <- vapply(out, function(x) as.numeric(x)[1], numeric(1))
+      out_list <- as.list(out_vals)
+      names(out_list) <- names(out)
+      return(out_list)
+    }
+
+    stop('R adjust function must return named numeric vector or named list.', call. = FALSE)
+  })
 }
 
 
