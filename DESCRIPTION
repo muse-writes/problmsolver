@@ -1,0 +1,12 @@
+Package: problmsolver
+Title: An LLM Sampling Library Built on llama.cpp
+Version: 0.0.0.9000
+Authors@R: 
+    person("Clio", "Johnson", , "d.k.johnson@lancaster.ac.uk", role = c("aut", "cre"))
+Description: This library, built on top of llama.cpp, and acting as a sister library to problm_solver in Python, allows for loading, running, and easy implementation of sampling algorithms in LLMs, which can be switched out . Runs on user-provided GGUF files. This library is intended to bring the study of LLM sampling to easy access for statisticians and other researchers.
+License: MIT
+Encoding: UTF-8
+Imports:
+    reticulate
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.0.0
