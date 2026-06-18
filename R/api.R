@@ -115,6 +115,38 @@ ps_use_backend_env <- function(envname = 'r-problmsolver', required = TRUE) {
 }
 
 
+#' Setup backend from a local `probLM-solver` clone
+#'
+#' Convenience wrapper for users who have `probLM-solver` cloned locally rather
+#' than installed from an index.
+#'
+#' @param path Path to local `probLM-solver` repository.
+#' @param envname Managed virtualenv name.
+#' @param python Optional Python executable used to create env if missing.
+#' @param upgrade If `TRUE`, force reinstall in backend env.
+#'
+#' @return Invisibly returns `envname`.
+#' @export
+ps_backend_setup_local <- function(
+    path,
+    envname = 'r-problmsolver',
+    python = NULL,
+    upgrade = FALSE
+) {
+  if (!nzchar(path) || !dir.exists(path)) {
+    stop('`path` must be an existing directory to a local probLM-solver clone.', call. = FALSE)
+  }
+
+  local_path <- normalizePath(path, winslash = '/', mustWork = TRUE)
+  ps_backend_setup(
+    envname = envname,
+    python = python,
+    packages = c(local_path),
+    upgrade = upgrade
+  )
+}
+
+
 #' Return active reticulate Python configuration
 #'
 #' @return A list-like Python configuration from `reticulate::py_config()`.

@@ -3,7 +3,7 @@ test_that('public API exports are present', {
 
   expected <- c(
     'ps_configure', 'ps_available', 'ps_python_config', 'ps_module', 'ps_reset_module',
-    'ps_backend_setup', 'ps_use_backend_env',
+    'ps_backend_setup', 'ps_backend_setup_local', 'ps_use_backend_env',
     'ps_metropolis_sampler', 'ps_beam_sampler', 'ps_sample_low_temp',
     'ps_sample_power_dist', 'ps_adjust_identity',
     'ps_model', 'ps_change_context', 'ps_query', 'ps_query_n_times',

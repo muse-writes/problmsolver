@@ -27,6 +27,17 @@ ps_python_config()
 ps_module()
 ```
 
+## Alternate backend setup (local `probLM-solver` clone)
+
+If `probLM-solver` is not hosted on PyPI for your workflow and you have it
+cloned locally, install from that path into the managed backend env:
+
+```r
+ps_backend_setup_local("/abs/path/to/probLM-solver")
+ps_use_backend_env("r-problmsolver")
+ps_module()
+```
+
 ## Create a model
 
 ```r
@@ -69,6 +80,7 @@ out_power <- ps_generate_adjusted(
 Users do **not** need to manually install Python backend dependencies if they use:
 
 - `ps_backend_setup()` to create/install a managed virtualenv
+- `ps_backend_setup_local()` to install backend from a local clone path
 - `ps_use_backend_env()` to activate it in future sessions
 - `ps_configure(auto_create = TRUE)` to lazily create backend when missing
 
