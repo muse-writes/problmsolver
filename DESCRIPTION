@@ -8,5 +8,8 @@ License: MIT
 Encoding: UTF-8
 Imports:
     reticulate
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 8.0.0

@@ -3,7 +3,8 @@
 #' This package provides a thin, explicit wrapper around the Python package
 #' `problm_solver` using `reticulate`.
 #'
-#' @importFrom reticulate import py_module_available py_config use_python py_to_r tuple
+#' @importFrom reticulate import py_module_available py_config use_python use_virtualenv
+#' @importFrom reticulate py_to_r virtualenv_create virtualenv_exists virtualenv_install
 NULL
 
 
@@ -22,19 +23,37 @@ NULL
 #'
 #' @return Invisibly returns `TRUE` if module is importable.
 #' @export
-ps_configure <- function(python = NULL, required = TRUE) {
+ps_configure <- function(
+    python = NULL,
+    envname = NULL,
+    auto_create = FALSE,
+    required = TRUE
+) {
+  if (!is.null(envname)) {
+    ps_use_backend_env(envname = envname, required = FALSE)
+  }
+
   if (!is.null(python)) {
     use_python(python, required = TRUE)
   }
 
   ok <- py_module_available('problm_solver')
+
+  if (!ok && isTRUE(auto_create)) {
+    target_env <- if (is.null(envname)) 'r-problmsolver' else envname
+    ps_backend_setup(envname = target_env)
+    ok <- py_module_available('problm_solver')
+  }
+
   if (!ok && isTRUE(required)) {
     stop(
       'Python module `problm_solver` is not available in the active reticulate environment. ',
-      'Install it in that environment (e.g. `pip install problm-solver`), then retry.',
+      'Run `ps_backend_setup()` for a managed environment, or install manually ',
+      '(e.g. `pip install problm-solver`).',
       call. = FALSE
     )
   }
+
   invisible(ok)
 }
 
@@ -45,6 +64,54 @@ ps_configure <- function(python = NULL, required = TRUE) {
 #' @export
 ps_available <- function() {
   py_module_available('problm_solver')
+}
+
+
+#' Create/update a managed backend virtualenv
+#'
+#' Creates an isolated virtualenv and installs `problm-solver` so end users do
+#' not need to manually manage Python setup.
+#'
+#' @param envname Virtualenv name managed by `reticulate`.
+#' @param python Optional Python executable used to create the env.
+#' @param packages Python packages to install.
+#' @param upgrade If `TRUE`, force reinstall of packages.
+#'
+#' @return Invisibly returns `envname`.
+#' @export
+ps_backend_setup <- function(
+    envname = 'r-problmsolver',
+    python = NULL,
+    packages = c('problm-solver'),
+    upgrade = FALSE
+) {
+  if (!virtualenv_exists(envname)) {
+    virtualenv_create(envname = envname, python = python)
+  }
+
+  virtualenv_install(
+    envname = envname,
+    packages = packages,
+    ignore_installed = !isTRUE(upgrade)
+  )
+
+  use_virtualenv(envname, required = TRUE)
+  ps_reset_module()
+  invisible(envname)
+}
+
+
+#' Activate a managed backend virtualenv
+#'
+#' @param envname Virtualenv name.
+#' @param required Passed to `reticulate::use_virtualenv()`.
+#'
+#' @return Invisibly returns `envname`.
+#' @export
+ps_use_backend_env <- function(envname = 'r-problmsolver', required = TRUE) {
+  use_virtualenv(envname, required = required)
+  ps_reset_module()
+  invisible(envname)
 }
 
 
