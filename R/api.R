@@ -414,6 +414,48 @@ ps_query_log_probs <- function(model) {
 }
 
 
+#' Sample one adjusted token from the current model state
+#'
+#' Wrapper around Python `ModelInstance.sample_token_adjusted()`.
+#'
+#' @param model A `ps_model`.
+#' @param top_k Top-k candidate count.
+#' @param top_p Top-p mass threshold.
+#' @param adjust_fn Python callable adjustment function.
+#' @param use_live_state If `TRUE`, use current live model state when available.
+#' @param context_tokens Optional explicit context token IDs used when rebuilding state.
+#' @param prev_probs Optional numeric vector of previously sampled token probabilities.
+#' @param commit_token If `TRUE`, append sampled non-terminal token to live state.
+#'
+#' @return A named list mirroring Python `sample_token_adjusted()` output.
+#' @export
+ps_sample_token_adjusted <- function(
+    model,
+    top_k,
+    top_p,
+    adjust_fn,
+    use_live_state = TRUE,
+    context_tokens = NULL,
+    prev_probs = NULL,
+    commit_token = TRUE
+) {
+  .assert_model(model)
+
+  kwargs <- list(
+    top_k = as.integer(top_k),
+    top_p = as.numeric(top_p),
+    adjust_fn = adjust_fn,
+    use_live_state = isTRUE(use_live_state),
+    commit_token = isTRUE(commit_token)
+  )
+
+  if (!is.null(context_tokens)) kwargs$context_tokens <- as.list(as.integer(context_tokens))
+  if (!is.null(prev_probs)) kwargs$prev_probs <- as.list(as.numeric(prev_probs))
+
+  py_to_r(do.call(model$py$sample_token_adjusted, kwargs))
+}
+
+
 #' Generate adjusted response data
 #'
 #' @param model A `ps_model`.

@@ -59,7 +59,15 @@ ps_query(model)
 ## Sampling examples
 
 ```{r eval = FALSE}
-# Low-temperature
+# Single adjusted token (uses live model state by default)
+one <- ps_sample_token_adjusted(
+  model = model,
+  top_k = 8L,
+  top_p = 0.9,
+  adjust_fn = ps_sample_low_temp(alpha = 2.0)
+)
+
+# Low-temperature sequence generation
 low_temp <- ps_sample_low_temp(alpha = 2.0)
 out_low <- ps_generate_adjusted(
   model = model,

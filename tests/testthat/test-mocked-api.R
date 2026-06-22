@@ -1,3 +1,6 @@
+.ps_ns <- asNamespace('problmsolver')
+.ps_env <- get('.problmsolver_env', envir = .ps_ns)
+
 test_that('sampler constructors call through mocked python module', {
   fake <- new.env(parent = emptyenv())
   fake$adjust_probs <- new.env(parent = emptyenv())
@@ -16,9 +19,9 @@ test_that('sampler constructors call through mocked python module', {
   }
   fake$adjust_probs$adjust_identity <- 'identity_fn'
 
-  old <- problmsolver:::.problmsolver_env$module
-  on.exit(problmsolver:::.problmsolver_env$module <- old, add = TRUE)
-  problmsolver:::.problmsolver_env$module <- fake
+  old <- .ps_env$module
+  on.exit(.ps_env$module <- old, add = TRUE)
+  .ps_env$module <- fake
 
   m <- ps_metropolis_sampler(1L, 2L, 0.25)
   expect_equal(m$kind, 'metropolis')
@@ -59,6 +62,38 @@ test_that('model/query wrappers convert and return plain R objects', {
     rep('ans', length(dataset))
   }
 
+  py$sample_token_adjusted <- function(top_k, top_p, adjust_fn, use_live_state,
+                                       context_tokens = NULL, prev_probs = NULL,
+                                       commit_token = TRUE) {
+    py$sample_token_adjusted_call <- list(
+      top_k = top_k,
+      top_p = top_p,
+      adjust_fn = adjust_fn,
+      use_live_state = use_live_state,
+      context_tokens = context_tokens,
+      prev_probs = prev_probs,
+      commit_token = commit_token
+    )
+
+    list(
+      state_source = if (isTRUE(use_live_state)) 'live' else 'prompt',
+      used_live_state = isTRUE(use_live_state),
+      top_k = top_k,
+      top_p = top_p,
+      candidates_before_adjustment = list(
+        list(token = 'a', logprob = -0.1, prob = 0.7),
+        list(token = 'b', logprob = -1.1, prob = 0.3)
+      ),
+      candidates_after_adjustment = list(
+        list(token = 'a', logprob = -0.05, prob = 0.8),
+        list(token = 'b', logprob = -1.4, prob = 0.2)
+      ),
+      sampled_token = list(token = 'a', token_ids = list(42L), logprob = -0.05, prob = 0.8),
+      sampled_token_is_terminal = FALSE,
+      context_tokens_used_for_eval = context_tokens
+    )
+  }
+
   py$generate_adjusted <- function(top_k, top_p, adjust_fn, max_tokens, alpha,
                                    sampling_method = NULL, branch_sampler = NULL) {
     out <- new.env(parent = emptyenv())
@@ -80,9 +115,9 @@ test_that('model/query wrappers convert and return plain R objects', {
     py
   }
 
-  old <- problmsolver:::.problmsolver_env$module
-  on.exit(problmsolver:::.problmsolver_env$module <- old, add = TRUE)
-  problmsolver:::.problmsolver_env$module <- fake
+  old <- .ps_env$module
+  on.exit(.ps_env$module <- old, add = TRUE)
+  .ps_env$module <- fake
 
   model <- ps_model('m.gguf', context = 'q', n_ctx = 1024L, logits_all = TRUE, n_gpu_layers = 12L)
   expect_s3_class(model, 'ps_model')
@@ -93,6 +128,23 @@ test_that('model/query wrappers convert and return plain R objects', {
   lp <- ps_query_log_probs(model)
   expect_equal(lp$tokens, c('a', 'b'))
   expect_equal(lp$probs, c(0.3, 0.7))
+
+  one <- ps_sample_token_adjusted(
+    model = model,
+    top_k = 8L,
+    top_p = 0.9,
+    adjust_fn = function(x) x,
+    use_live_state = FALSE,
+    context_tokens = c(10L, 20L),
+    prev_probs = c(0.2, 0.7),
+    commit_token = FALSE
+  )
+  expect_equal(one$top_k, 8L)
+  expect_equal(one$used_live_state, FALSE)
+  expect_equal(one$sampled_token$token, 'a')
+  expect_equal(py$sample_token_adjusted_call$commit_token, FALSE)
+  expect_equal(py$sample_token_adjusted_call$context_tokens, as.list(c(10L, 20L)))
+  expect_equal(py$sample_token_adjusted_call$prev_probs, as.list(c(0.2, 0.7)))
 
   out <- ps_generate_adjusted(
     model = model,

@@ -50,6 +50,20 @@ model <- ps_model(
 )
 ```
 
+## Sample a single adjusted token (live-state friendly)
+
+```r
+# Uses model's live state by default (no prompt rebuild when live state exists)
+one <- ps_sample_token_adjusted(
+  model = model,
+  top_k = 8L,
+  top_p = 0.9,
+  adjust_fn = ps_sample_low_temp(alpha = 2.0)
+)
+
+str(one)
+```
+
 ## Generate with built-in samplers
 
 ```r
@@ -131,6 +145,6 @@ ps_available()
 
 - Backend/session: `ps_configure()`, `ps_available()`, `ps_module()`, `ps_reset_module()`
 - Model: `ps_model()`, `ps_query()`, `ps_query_n_times()`, `ps_query_log_probs()`
-- Adjusted gen: `ps_generate_adjusted()`, `ps_test_dataset_adjusted()`
+- Adjusted gen: `ps_sample_token_adjusted()`, `ps_generate_adjusted()`, `ps_test_dataset_adjusted()`
 - Samplers: `ps_metropolis_sampler()`, `ps_beam_sampler()`, `ps_sample_low_temp()`, `ps_sample_power_dist()`, `ps_adjust_identity()`, `ps_r_adjust_fn()`
 - Datasets: `ps_get_math500()`, `ps_get_problems_math500()`

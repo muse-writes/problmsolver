@@ -23,6 +23,7 @@ export(ps_query_n_times)
 export(ps_reset_module)
 export(ps_sample_low_temp)
 export(ps_sample_power_dist)
+export(ps_sample_token_adjusted)
 export(ps_test_dataset_adjusted)
 
 S3method(print,ps_model)
