@@ -172,6 +172,27 @@ test_that('local backend setup validates path', {
 })
 
 
+test_that('ps_backend_setup prefers python3.13 by default when available', {
+  created_python <- NULL
+
+  testthat::local_mocked_bindings(
+    .ps_default_python = function() '/usr/bin/python3.13',
+    virtualenv_exists = function(envname) FALSE,
+    virtualenv_create = function(envname, python) {
+      created_python <<- python
+      invisible(NULL)
+    },
+    virtualenv_install = function(envname, packages, ignore_installed) invisible(NULL),
+    use_virtualenv = function(envname, required = TRUE) invisible(NULL),
+    ps_reset_module = function() invisible(NULL),
+    .package = 'problmsolver'
+  )
+
+  expect_no_error(ps_backend_setup(envname = 'r-problmsolver'))
+  expect_equal(created_python, '/usr/bin/python3.13')
+})
+
+
 test_that('ps_r_adjust_fn validates input function', {
   expect_error(ps_r_adjust_fn(1), '`fn` must be a function')
 

@@ -29,19 +29,19 @@ ps_configure <- function(
     auto_create = FALSE,
     required = TRUE
 ) {
+  python <- if (is.null(python)) .ps_default_python() else python
+
   if (!is.null(envname)) {
     ps_use_backend_env(envname = envname, required = FALSE)
   }
 
-  if (!is.null(python)) {
-    use_python(python, required = TRUE)
-  }
+  .ps_bind_python_preferred(python)
 
   ok <- py_module_available('problm_solver')
 
   if (!ok && isTRUE(auto_create)) {
     target_env <- if (is.null(envname)) 'r-problmsolver' else envname
-    ps_backend_setup(envname = target_env)
+    ps_backend_setup(envname = target_env, python = python)
     ok <- py_module_available('problm_solver')
   }
 
@@ -63,6 +63,7 @@ ps_configure <- function(
 #' @return Logical scalar indicating whether `problm_solver` is importable.
 #' @export
 ps_available <- function() {
+  .ps_bind_python_preferred(.ps_default_python())
   py_module_available('problm_solver')
 }
 
@@ -73,7 +74,8 @@ ps_available <- function() {
 #' not need to manually manage Python setup.
 #'
 #' @param envname Virtualenv name managed by `reticulate`.
-#' @param python Optional Python executable used to create the env.
+#' @param python Optional Python executable used to create the env. If `NULL`,
+#'   the wrapper will prefer `python3.13` when available on `PATH`.
 #' @param packages Python packages to install.
 #' @param upgrade If `TRUE`, force reinstall of packages.
 #'
@@ -85,7 +87,25 @@ ps_backend_setup <- function(
     packages = c('problm-solver'),
     upgrade = FALSE
 ) {
-  if (!virtualenv_exists(envname)) {
+  if (is.null(python)) {
+    python <- .ps_default_python()
+  }
+
+  if (virtualenv_exists(envname)) {
+    env_python <- tryCatch(reticulate::virtualenv_python(envname), error = function(e) NULL)
+    env_version <- .ps_python_version(env_python)
+    requested_version <- .ps_python_version(python)
+
+    if (!is.null(requested_version) && .ps_is_python_313(requested_version) &&
+        !is.null(env_version) && !.ps_is_python_313(env_version)) {
+      warning(
+        'Virtualenv `', envname, '` already exists with ', env_version,
+        ', not Python 3.13. To recreate with Python 3.13 run ',
+        '`reticulate::virtualenv_remove("', envname, '")` then `ps_backend_setup(...)`.',
+        call. = FALSE
+      )
+    }
+  } else {
     virtualenv_create(envname = envname, python = python)
   }
 
@@ -122,7 +142,8 @@ ps_use_backend_env <- function(envname = 'r-problmsolver', required = TRUE) {
 #'
 #' @param path Path to local `probLM-solver` repository.
 #' @param envname Managed virtualenv name.
-#' @param python Optional Python executable used to create env if missing.
+#' @param python Optional Python executable used to create env if missing. If
+#'   `NULL`, the wrapper will prefer `python3.13` when available on `PATH`.
 #' @param upgrade If `TRUE`, force reinstall in backend env.
 #'
 #' @return Invisibly returns `envname`.
@@ -563,6 +584,89 @@ ps_get_problems_math500 <- function(fname = NULL) {
 
 
 # Helpers ------------------------------------------------------------------
+.ps_default_python <- function() {
+  py313 <- Sys.which('python3.13')
+  if (nzchar(py313)) {
+    return(py313)
+  }
+
+  uv_candidates <- unique(c(
+    Sys.which('uv'),
+    path.expand('~/.local/bin/uv'),
+    '/usr/local/bin/uv'
+  ))
+  uv_candidates <- uv_candidates[nzchar(uv_candidates) & file.exists(uv_candidates)]
+
+  for (uv in uv_candidates) {
+    uv_out <- tryCatch(
+      system2(uv, c('python', 'find', '3.13'), stdout = TRUE, stderr = FALSE),
+      error = function(e) character(0)
+    )
+    if (length(uv_out) >= 1 && nzchar(uv_out[[1]]) && file.exists(uv_out[[1]])) {
+      return(uv_out[[1]])
+    }
+  }
+
+  uv_glob <- Sys.glob(path.expand('~/.local/share/uv/python/*/bin/python3.13'))
+  if (length(uv_glob) >= 1 && nzchar(uv_glob[[1]]) && file.exists(uv_glob[[1]])) {
+    return(uv_glob[[1]])
+  }
+
+  NULL
+}
+
+.ps_bind_python_preferred <- function(python) {
+  if (is.null(python) || !nzchar(python) || !file.exists(python)) {
+    return(invisible(NULL))
+  }
+
+  if (reticulate::py_available(initialize = FALSE)) {
+    cfg <- tryCatch(py_config(), error = function(e) NULL)
+    active_python <- if (is.null(cfg)) NULL else cfg$python
+
+    if (!is.null(active_python) && nzchar(active_python)) {
+      same <- tryCatch(
+        normalizePath(active_python, winslash = '/', mustWork = FALSE) ==
+          normalizePath(python, winslash = '/', mustWork = FALSE),
+        error = function(e) FALSE
+      )
+      if (!same) {
+        warning(
+          'reticulate is already initialized with ', active_python,
+          '. Preferred Python is ', python,
+          '. Restart R to switch interpreters.',
+          call. = FALSE
+        )
+      }
+    }
+    return(invisible(NULL))
+  }
+
+  use_python(python, required = FALSE)
+  invisible(NULL)
+}
+
+.ps_python_version <- function(python) {
+  if (is.null(python) || !nzchar(python)) {
+    return(NULL)
+  }
+
+  out <- tryCatch(
+    system2(python, '--version', stdout = TRUE, stderr = TRUE),
+    error = function(e) character(0)
+  )
+
+  if (length(out) < 1 || !nzchar(out[[1]])) {
+    return(NULL)
+  }
+
+  out[[1]]
+}
+
+.ps_is_python_313 <- function(version_string) {
+  !is.null(version_string) && grepl('^Python 3\\.13\\.', version_string)
+}
+
 .assert_model <- function(model) {
   if (!inherits(model, 'ps_model') || is.null(model$py)) {
     stop('`model` must be an object returned by ps_model().', call. = FALSE)

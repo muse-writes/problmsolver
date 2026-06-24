@@ -25,6 +25,7 @@ sampling, and dataset utilities.
 library(problmsolver)
 
 # Creates/updates a managed virtualenv and installs `problm-solver`
+# (prefers python3.13 automatically when available)
 ps_backend_setup()
 ps_use_backend_env()
 ```

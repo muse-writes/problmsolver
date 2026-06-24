@@ -18,6 +18,7 @@ remotes::install_local(".")
 library(problmsolver)
 
 # One-time setup for a managed Python backend env
+# (prefers python3.13 automatically when available)
 ps_backend_setup()
 
 # Optional: inspect active Python configuration
@@ -120,7 +121,7 @@ out_custom <- ps_generate_adjusted(
 
 Users do **not** need to manually install Python backend dependencies if they use:
 
-- `ps_backend_setup()` to create/install a managed virtualenv
+- `ps_backend_setup()` to create/install a managed virtualenv (prefers `python3.13` by default)
 - `ps_backend_setup_local()` to install backend from a local clone path
 - `ps_use_backend_env()` to activate it in future sessions
 - `ps_configure(auto_create = TRUE)` to lazily create backend when missing
