@@ -19,6 +19,9 @@ NULL
 #' `problm_solver`.
 #'
 #' @param python Optional path to Python executable.
+#' @param envname Optional reticulate virtualenv name to activate first.
+#' @param auto_create If `TRUE`, create/install the managed backend env when
+#'   `problm_solver` is missing.
 #' @param required If `TRUE`, error if the Python module cannot be imported.
 #'
 #' @return Invisibly returns `TRUE` if module is importable.
@@ -29,13 +32,14 @@ ps_configure <- function(
     auto_create = FALSE,
     required = TRUE
 ) {
+  explicit_python <- !is.null(python)
   python <- if (is.null(python)) .ps_default_python() else python
 
   if (!is.null(envname)) {
     ps_use_backend_env(envname = envname, required = FALSE)
   }
 
-  .ps_bind_python_preferred(python)
+  .ps_bind_python_preferred(python, warn_mismatch = explicit_python)
 
   ok <- py_module_available('problm_solver')
 
@@ -63,7 +67,7 @@ ps_configure <- function(
 #' @return Logical scalar indicating whether `problm_solver` is importable.
 #' @export
 ps_available <- function() {
-  .ps_bind_python_preferred(.ps_default_python())
+  .ps_bind_python_preferred(.ps_default_python(), warn_mismatch = FALSE)
   py_module_available('problm_solver')
 }
 
@@ -189,7 +193,12 @@ ps_module <- function(delay_load = FALSE) {
   }
 
   ps_configure(required = TRUE)
-  .problmsolver_env$module <- import('problm_solver', delay_load = delay_load)
+  root <- import('problm_solver', delay_load = delay_load)
+  root$adjust_probs <- import('problm_solver.adjust_probs', delay_load = delay_load)
+  root$candidates <- import('problm_solver.candidates', delay_load = delay_load)
+  root$datasets <- import('problm_solver.datasets', delay_load = delay_load)
+  root$llama_interface <- import('problm_solver.llama_interface', delay_load = delay_load)
+  .problmsolver_env$module <- root
   .problmsolver_env$module
 }
 
@@ -206,6 +215,23 @@ ps_reset_module <- function() {
 }
 
 
+# Randomness ---------------------------------------------------------------
+
+#' Create a backend random manager
+#'
+#' A random manager is an opaque backend object that can be passed to `rng`
+#' arguments on model/sampler/query functions to get reproducible named random
+#' streams. Numeric seeds can also be passed directly to `rng` arguments.
+#'
+#' @param seed Integer root seed.
+#'
+#' @return Python `RandomManager` object.
+#' @export
+ps_random <- function(seed = 314159L) {
+  ps_module()$PSRandom(seed = as.integer(seed))
+}
+
+
 # Sampler constructors -----------------------------------------------------
 
 #' Create Python `MetropolisSampler`
@@ -213,15 +239,23 @@ ps_reset_module <- function() {
 #' @param equil_branches Burn-in branch count.
 #' @param max_branches Maximum number of branch samples.
 #' @param tolerance Convergence tolerance.
+#' @param rng Optional numeric seed or backend random manager.
 #'
 #' @return Python sampler object.
 #' @export
-ps_metropolis_sampler <- function(equil_branches = 5L, max_branches = 30L, tolerance = 1e-1) {
-  ps_module()$adjust_probs$MetropolisSampler(
+ps_metropolis_sampler <- function(
+    equil_branches = 5L,
+    max_branches = 30L,
+    tolerance = 1e-1,
+    rng = NULL
+) {
+  kwargs <- list(
     equil_branches = as.integer(equil_branches),
     max_branches = as.integer(max_branches),
     tolerance = as.numeric(tolerance)
   )
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
+  do.call(ps_module()$adjust_probs$MetropolisSampler, kwargs)
 }
 
 
@@ -232,7 +266,7 @@ ps_metropolis_sampler <- function(equil_branches = 5L, max_branches = 30L, toler
 #'
 #' @return Python sampler object.
 #' @export
-ps_beam_sampler <- function(beam_width = 10L, branch_top_k = 5L) {
+ps_beam_sampler <- function(beam_width = 3L, branch_top_k = 5L) {
   ps_module()$adjust_probs$BeamSampler(
     beam_width = as.integer(beam_width),
     branch_top_k = as.integer(branch_top_k)
@@ -281,21 +315,26 @@ ps_adjust_identity <- function() {
 }
 
 
-#' Wrap an R sampling function as a Python-compatible adjust function
+#' Wrap an R adjustment function for adjusted generation
 #'
-#' Converts an R function into a Python callable suitable for
-#' `ps_generate_adjusted(..., adjust_fn = ...)`.
+#' Converts an R function into a Python-compatible `AdjustFn` for
+#' `ps_generate_adjusted()` and `ps_sample_token_adjusted()`. The current Python
+#' backend adjusts candidates in token-ID space, so the R callback receives and
+#' returns token IDs plus log-probabilities.
 #'
-#' The R function must accept one argument `ctx`, a list with fields:
-#' - `token_probs`: named numeric vector of token log-probabilities
-#' - `prev_probs`: numeric vector of previously selected token probabilities
-#' - `context_tokens`: integer vector of current token IDs
+#' The R callback receives one list `ctx` with fields:
+#' - `candidates`: data frame with `token_id`, `logprob`, and `candidate_prob`
+#' - `token_ids`: integer vector of candidate token IDs
+#' - `logprobs`: numeric vector of candidate log-probabilities
+#' - `prev_probs`: numeric vector of previous sampled token probabilities
+#' - `context_tokens`: integer vector of current prompt/generated token IDs
+#' - `query_next_ids(context_tokens)`: helper returning a candidate data frame
+#' - `query_branch(context_tokens, depth)`: helper returning a branch log-prob
 #'
-#' The function must return either:
-#' - a named numeric vector, or
-#' - a named list of numeric values
-#'
-#' representing adjusted token log-probabilities.
+#' The callback may return a data frame with `token_id`/`logprob` columns, a
+#' list with `token_ids`/`logprobs`, a named numeric vector whose names are token
+#' IDs, or an unnamed numeric vector of the same length/order as the input
+#' candidates.
 #'
 #' @param fn R function implementing adjustment logic.
 #'
@@ -307,35 +346,27 @@ ps_r_adjust_fn <- function(fn) {
   }
 
   py_func(function(ctx) {
+    candidates <- .ps_candidate_tokens_to_df(ctx$token_id_probs)
+    token_ids <- candidates$token_id
+    logprobs <- candidates$logprob
+
     r_ctx <- list(
-      token_probs = as.numeric(unlist(py_to_r(ctx$token_probs))),
+      candidates = candidates,
+      token_ids = token_ids,
+      logprobs = logprobs,
       prev_probs = as.numeric(py_to_r(ctx$prev_probs)),
-      context_tokens = as.integer(py_to_r(ctx$context_tokens))
+      context_tokens = as.integer(py_to_r(ctx$context_tokens)),
+      query_next_ids = function(context_tokens) {
+        .ps_candidate_tokens_to_df(ctx$query_next_id(as.list(as.integer(context_tokens))))
+      },
+      query_branch = function(context_tokens, depth) {
+        as.numeric(ctx$query_branch(as.list(as.integer(context_tokens)), as.integer(depth)))[1]
+      }
     )
-    names(r_ctx$token_probs) <- names(py_to_r(ctx$token_probs))
 
     out <- fn(r_ctx)
-
-    if (is.numeric(out)) {
-      if (is.null(names(out))) {
-        stop('R adjust function must return named numeric output.', call. = FALSE)
-      }
-      out_list <- as.list(as.numeric(out))
-      names(out_list) <- names(out)
-      return(out_list)
-    }
-
-    if (is.list(out)) {
-      if (is.null(names(out))) {
-        stop('R adjust function must return a named list.', call. = FALSE)
-      }
-      out_vals <- vapply(out, function(x) as.numeric(x)[1], numeric(1))
-      out_list <- as.list(out_vals)
-      names(out_list) <- names(out)
-      return(out_list)
-    }
-
-    stop('R adjust function must return named numeric vector or named list.', call. = FALSE)
+    converted <- .ps_r_adjust_output_to_candidates(out, token_ids = token_ids)
+    .ps_candidate_tokens(converted$token_ids, converted$logprobs)
   })
 }
 
@@ -349,6 +380,9 @@ ps_r_adjust_fn <- function(fn) {
 #' @param n_ctx Context window size.
 #' @param logits_all Whether full logits should be available.
 #' @param n_gpu_layers Number of layers to offload to GPU.
+#' @param use_c_api Whether to use the backend C API wrapper for logits/state.
+#' @param c_api_copy_logits Whether C-API logits should be copied before use.
+#' @param rng Optional numeric seed or backend random manager.
 #'
 #' @return An object of class `ps_model` containing the Python model object.
 #' @export
@@ -357,16 +391,23 @@ ps_model <- function(
     context = '',
     n_ctx = 4096L,
     logits_all = FALSE,
-    n_gpu_layers = 0L
+    n_gpu_layers = 0L,
+    use_c_api = TRUE,
+    c_api_copy_logits = TRUE,
+    rng = NULL
 ) {
-  py_model <- ps_module()$llama_interface$ModelInstance(
+  kwargs <- list(
     fname = fname,
     context = context,
     n_ctx = as.integer(n_ctx),
     logits_all = isTRUE(logits_all),
-    n_gpu_layers = as.integer(n_gpu_layers)
+    n_gpu_layers = as.integer(n_gpu_layers),
+    use_c_api = isTRUE(use_c_api),
+    c_api_copy_logits = isTRUE(c_api_copy_logits)
   )
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
 
+  py_model <- do.call(ps_module()$llama_interface$ModelInstance, kwargs)
   structure(list(py = py_model), class = 'ps_model')
 }
 
@@ -396,12 +437,16 @@ ps_change_context <- function(model, context) {
 #' Query model once
 #'
 #' @param model A `ps_model`.
+#' @param max_tokens Maximum generated tokens.
+#' @param rng Optional numeric seed or backend random manager.
 #'
 #' @return Character scalar response.
 #' @export
-ps_query <- function(model) {
+ps_query <- function(model, max_tokens = 512L, rng = NULL) {
   .assert_model(model)
-  py_to_r(model$py$query())
+  kwargs <- list(max_tokens = as.integer(max_tokens))
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
+  py_to_r(do.call(model$py$query, kwargs))
 }
 
 
@@ -418,20 +463,120 @@ ps_query_n_times <- function(model, n) {
 }
 
 
+#' Generate response data with repeated ordinary queries
+#'
+#' @param model A `ps_model`.
+#' @param n_samples Number of responses.
+#'
+#' @return Plain R list with `prompt` and `data` fields.
+#' @export
+ps_generate_data <- function(model, n_samples) {
+  .assert_model(model)
+  out <- model$py$generate_data(as.integer(n_samples))
+  list(
+    prompt = py_to_r(out$prompt),
+    data = py_to_r(out$data)
+  )
+}
+
+
 #' Query token probabilities for one generated response
 #'
 #' @param model A `ps_model`.
+#' @param rng Optional numeric seed or backend random manager.
 #'
 #' @return Named list containing prompt, tokens, and probs.
 #' @export
-ps_query_log_probs <- function(model) {
+ps_query_log_probs <- function(model, rng = NULL) {
   .assert_model(model)
-  out <- model$py$query_log_probs()
+  kwargs <- list()
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
+  out <- do.call(model$py$query_log_probs, kwargs)
   list(
     prompt = py_to_r(out$prompt),
     tokens = py_to_r(out$tokens),
     probs = py_to_r(out$probs)
   )
+}
+
+
+#' Query top-k next-token candidates in token-ID space
+#'
+#' @param model A `ps_model`.
+#' @param context_tokens Integer vector of token IDs to evaluate.
+#' @param n_tokens Number of candidate tokens to return.
+#'
+#' @return Data frame with `token_id`, `logprob`, and `candidate_prob`.
+#' @export
+ps_query_log_probs_next_token_ids <- function(model, context_tokens, n_tokens) {
+  .assert_model(model)
+  out <- model$py$query_log_probs_next_token_ids(
+    context_tokens = as.list(as.integer(context_tokens)),
+    n_tokens = as.integer(n_tokens)
+  )
+  .ps_candidate_tokens_to_df(out)
+}
+
+
+#' Query top-k next-token candidates as strings
+#'
+#' @param model A `ps_model`.
+#' @param context_tokens Integer vector of token IDs to evaluate.
+#' @param n_tokens Number of candidate tokens to return.
+#'
+#' @return Named list containing prompt, output token IDs, and top-k token map.
+#' @export
+ps_query_log_probs_next_token <- function(model, context_tokens, n_tokens) {
+  .assert_model(model)
+  out <- model$py$query_log_probs_next_token(
+    context_tokens = as.list(as.integer(context_tokens)),
+    n_tokens = as.integer(n_tokens)
+  )
+  list(
+    prompt = py_to_r(out$prompt),
+    output_vec = as.integer(py_to_r(out$output_vec)),
+    top_k_tokens = py_to_r(out$top_k_tokens)
+  )
+}
+
+
+#' Generate a random branch and return its total log-probability
+#'
+#' @param model A `ps_model`.
+#' @param context_tokens Integer vector of token IDs to evaluate before branch generation.
+#' @param max_tokens Maximum branch length.
+#' @param rng Optional numeric seed or backend random manager.
+#'
+#' @return Numeric scalar branch log-probability.
+#' @export
+ps_query_branch <- function(model, context_tokens, max_tokens, rng = NULL) {
+  .assert_model(model)
+  kwargs <- list(
+    context_tokens = as.list(as.integer(context_tokens)),
+    max_tokens = as.integer(max_tokens)
+  )
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
+  as.numeric(do.call(model$py$query_branch, kwargs))[1]
+}
+
+
+#' Generate a random branch from the model's current live state
+#'
+#' This is a thin wrapper over Python `query_branch_from_live()`. It is mainly
+#' useful for advanced iterative decoding workflows that deliberately manage the
+#' model's live state through previous calls such as `ps_sample_token_adjusted()`.
+#'
+#' @param model A `ps_model`.
+#' @param max_tokens Maximum branch length.
+#' @param rng Optional numeric seed or backend random manager.
+#'
+#' @return Numeric scalar branch log-probability.
+#' @export
+ps_query_branch_from_live <- function(model, max_tokens, rng = NULL) {
+  .assert_model(model)
+  kwargs <- list(max_tokens = as.integer(max_tokens))
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
+  as.numeric(do.call(model$py$query_branch_from_live, kwargs))[1]
 }
 
 
@@ -447,6 +592,7 @@ ps_query_log_probs <- function(model) {
 #' @param context_tokens Optional explicit context token IDs used when rebuilding state.
 #' @param prev_probs Optional numeric vector of previously sampled token probabilities.
 #' @param commit_token If `TRUE`, append sampled non-terminal token to live state.
+#' @param rng Optional numeric seed or backend random manager.
 #'
 #' @return A named list mirroring Python `sample_token_adjusted()` output.
 #' @export
@@ -458,7 +604,8 @@ ps_sample_token_adjusted <- function(
     use_live_state = TRUE,
     context_tokens = NULL,
     prev_probs = NULL,
-    commit_token = TRUE
+    commit_token = TRUE,
+    rng = NULL
 ) {
   .assert_model(model)
 
@@ -472,6 +619,7 @@ ps_sample_token_adjusted <- function(
 
   if (!is.null(context_tokens)) kwargs$context_tokens <- as.list(as.integer(context_tokens))
   if (!is.null(prev_probs)) kwargs$prev_probs <- as.list(as.numeric(prev_probs))
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
 
   py_to_r(do.call(model$py$sample_token_adjusted, kwargs))
 }
@@ -487,6 +635,7 @@ ps_sample_token_adjusted <- function(
 #' @param alpha Optional alpha for metadata.
 #' @param sampling_method Optional sampling method label.
 #' @param branch_sampler Optional branch sampler label.
+#' @param rng Optional numeric seed or backend random manager.
 #'
 #' @return A list with fields mirroring Python `LLMOutputDataFull`.
 #' @export
@@ -498,7 +647,8 @@ ps_generate_adjusted <- function(
     max_tokens,
     alpha = 1.0,
     sampling_method = NULL,
-    branch_sampler = NULL
+    branch_sampler = NULL,
+    rng = NULL
 ) {
   .assert_model(model)
 
@@ -512,12 +662,13 @@ ps_generate_adjusted <- function(
 
   if (!is.null(sampling_method)) kwargs$sampling_method <- sampling_method
   if (!is.null(branch_sampler)) kwargs$branch_sampler <- branch_sampler
+  if (!is.null(rng)) kwargs$rng <- .ps_rng_arg(rng)
 
   out <- do.call(model$py$generate_adjusted, kwargs)
 
   list(
     context = py_to_r(out$context),
-    hyperparams = py_to_r(out$hyperparams),
+    hyperparams = .ps_hyperparams_to_list(out$hyperparams),
     response_probabilities = py_to_r(out$response_probabilities),
     response_topk = py_to_r(out$response_topk),
     sampling_method = py_to_r(out$sampling_method),
@@ -615,7 +766,7 @@ ps_get_problems_math500 <- function(fname = NULL) {
   NULL
 }
 
-.ps_bind_python_preferred <- function(python) {
+.ps_bind_python_preferred <- function(python, warn_mismatch = TRUE) {
   if (is.null(python) || !nzchar(python) || !file.exists(python)) {
     return(invisible(NULL))
   }
@@ -630,7 +781,7 @@ ps_get_problems_math500 <- function(fname = NULL) {
           normalizePath(python, winslash = '/', mustWork = FALSE),
         error = function(e) FALSE
       )
-      if (!same) {
+      if (!same && isTRUE(warn_mismatch)) {
         warning(
           'reticulate is already initialized with ', active_python,
           '. Preferred Python is ', python,
@@ -671,4 +822,82 @@ ps_get_problems_math500 <- function(fname = NULL) {
   if (!inherits(model, 'ps_model') || is.null(model$py)) {
     stop('`model` must be an object returned by ps_model().', call. = FALSE)
   }
+}
+
+.ps_rng_arg <- function(rng) {
+  if (is.numeric(rng) && length(rng) == 1L) {
+    return(as.integer(rng))
+  }
+  rng
+}
+
+.ps_candidate_tokens <- function(token_ids, logprobs) {
+  np <- import('numpy', convert = FALSE)
+  ps_module()$candidates$CandidateTokens(
+    candidate_ids = np$array(as.list(as.integer(token_ids)), dtype = 'int32'),
+    candidate_logprobs = np$array(as.list(as.numeric(logprobs)), dtype = 'float64')
+  )
+}
+
+.ps_candidate_tokens_to_df <- function(candidates) {
+  token_ids <- as.integer(py_to_r(candidates$candidate_ids))
+  logprobs <- as.numeric(py_to_r(candidates$candidate_logprobs))
+  if (length(logprobs) == 0L) {
+    probs <- numeric(0)
+  } else {
+    shifted <- logprobs - max(logprobs)
+    probs <- exp(shifted) / sum(exp(shifted))
+  }
+  data.frame(
+    token_id = token_ids,
+    logprob = logprobs,
+    candidate_prob = probs,
+    stringsAsFactors = FALSE
+  )
+}
+
+.ps_r_adjust_output_to_candidates <- function(out, token_ids) {
+  if (is.data.frame(out)) {
+    if (!all(c('token_id', 'logprob') %in% names(out))) {
+      stop('R adjust data frame output must contain `token_id` and `logprob` columns.', call. = FALSE)
+    }
+    return(list(token_ids = as.integer(out$token_id), logprobs = as.numeric(out$logprob)))
+  }
+
+  if (is.list(out) && all(c('token_ids', 'logprobs') %in% names(out))) {
+    return(list(token_ids = as.integer(out$token_ids), logprobs = as.numeric(out$logprobs)))
+  }
+
+  if (is.numeric(out)) {
+    if (!is.null(names(out)) && all(nzchar(names(out)))) {
+      return(list(token_ids = as.integer(names(out)), logprobs = as.numeric(out)))
+    }
+
+    if (length(out) != length(token_ids)) {
+      stop(
+        'Unnamed numeric adjust output must have same length as input candidates.',
+        call. = FALSE
+      )
+    }
+    return(list(token_ids = as.integer(token_ids), logprobs = as.numeric(out)))
+  }
+
+  stop(
+    'R adjust function must return a data frame, a token_ids/logprobs list, ',
+    'a named numeric vector, or an unnamed numeric vector matching the input length.',
+    call. = FALSE
+  )
+}
+
+.ps_hyperparams_to_list <- function(hyperparams) {
+  if (is.list(hyperparams) && all(c('alpha', 'top_k', 'top_p', 'max_tokens') %in% names(hyperparams))) {
+    return(hyperparams)
+  }
+
+  list(
+    alpha = as.numeric(py_to_r(hyperparams$alpha)),
+    top_k = as.integer(py_to_r(hyperparams$top_k)),
+    top_p = as.numeric(py_to_r(hyperparams$top_p)),
+    max_tokens = as.integer(py_to_r(hyperparams$max_tokens))
+  )
 }
