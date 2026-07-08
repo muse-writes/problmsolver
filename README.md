@@ -47,7 +47,10 @@ model <- ps_model(
   context = "Why is the sky blue?",
   n_ctx = 4096L,
   logits_all = TRUE,
-  n_gpu_layers = 999L
+  n_gpu_layers = 999L,
+  use_c_api = TRUE,
+  c_api_copy_logits = TRUE,
+  rng = 123L
 )
 ```
 
@@ -93,18 +96,19 @@ out_power <- ps_generate_adjusted(
 ## Custom sampling function example
 
 You can define a sampling function directly in R and wrap it for Python with
-`ps_r_adjust_fn()`. The R function receives a list with token probabilities and
-must return adjusted named log-probabilities.
+`ps_r_adjust_fn()`. The Python backend now adjusts candidates in token-ID space,
+so the R function receives candidate IDs and log-probabilities and returns
+adjusted log-probabilities for those IDs.
 
 ```r
 my_adjust_r <- function(ctx) {
-  out <- ctx$token_probs
+  # `ctx$candidates` has token_id, logprob, and candidate_prob columns.
+  out <- ctx$logprobs
 
-  # example: slightly favour a specific token if present
-  if (' the' %in% names(out)) {
-    out[' the'] <- out[' the'] + 0.25
-  }
+  # example: slightly favour the first candidate
+  out[1] <- out[1] + 0.25
 
+  # unnamed numeric output keeps the original candidate token_id order
   out
 }
 
@@ -145,7 +149,8 @@ ps_available()
 ## API overview
 
 - Backend/session: `ps_configure()`, `ps_available()`, `ps_module()`, `ps_reset_module()`
-- Model: `ps_model()`, `ps_query()`, `ps_query_n_times()`, `ps_query_log_probs()`
+- Model: `ps_model()`, `ps_query()`, `ps_query_n_times()`, `ps_generate_data()`, `ps_query_log_probs()`
+- Next-token/branch probes: `ps_query_log_probs_next_token_ids()`, `ps_query_log_probs_next_token()`, `ps_query_branch()`, `ps_query_branch_from_live()`
 - Adjusted gen: `ps_sample_token_adjusted()`, `ps_generate_adjusted()`, `ps_test_dataset_adjusted()`
-- Samplers: `ps_metropolis_sampler()`, `ps_beam_sampler()`, `ps_sample_low_temp()`, `ps_sample_power_dist()`, `ps_adjust_identity()`, `ps_r_adjust_fn()`
+- Samplers/randomness: `ps_random()`, `ps_metropolis_sampler()`, `ps_beam_sampler()`, `ps_sample_low_temp()`, `ps_sample_power_dist()`, `ps_adjust_identity()`, `ps_r_adjust_fn()`
 - Datasets: `ps_get_math500()`, `ps_get_problems_math500()`
