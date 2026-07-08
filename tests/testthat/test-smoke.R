@@ -7,7 +7,9 @@ test_that('public API exports are present', {
     'ps_metropolis_sampler', 'ps_beam_sampler', 'ps_sample_low_temp',
     'ps_sample_power_dist', 'ps_adjust_identity', 'ps_r_adjust_fn',
     'ps_model', 'ps_change_context', 'ps_query', 'ps_query_n_times',
-    'ps_query_log_probs', 'ps_sample_token_adjusted', 'ps_generate_adjusted', 'ps_test_dataset_adjusted',
+    'ps_generate_data', 'ps_query_log_probs', 'ps_query_log_probs_next_token_ids',
+    'ps_query_log_probs_next_token', 'ps_query_branch', 'ps_query_branch_from_live',
+    'ps_sample_token_adjusted', 'ps_generate_adjusted', 'ps_test_dataset_adjusted', 'ps_random',
     'ps_get_math500', 'ps_get_problems_math500'
   )
 
